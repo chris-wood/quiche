@@ -252,7 +252,7 @@ pub const MIN_CLIENT_INITIAL_LEN: usize = 1200;
 
 const PAYLOAD_MIN_LEN: usize = 4;
 
-const MAX_AMPLIFICATION_FACTOR: usize = 3;
+const MAX_AMPLIFICATION_FACTOR: u64 = 3;
 
 /// A specialized [`Result`] type for quiche operations.
 ///
@@ -608,24 +608,24 @@ pub struct Connection {
     sent_count: usize,
 
     /// Total number of bytes received from the peer.
-    rx_data: usize,
+    rx_data: u64,
 
     /// Local flow control limit for the connection.
-    max_rx_data: usize,
+    max_rx_data: u64,
 
     /// Updated local flow control limit for the connection. This is used to
     /// trigger sending MAX_DATA frames after a certain threshold.
-    max_rx_data_next: usize,
+    max_rx_data_next: u64,
 
     /// Total number of bytes sent to the peer.
-    tx_data: usize,
+    tx_data: u64,
 
     /// Peer's flow control limit for the connection.
-    max_tx_data: usize,
+    max_tx_data: u64,
 
     /// Total number of bytes the server can send before the peer's address
     /// is verified.
-    max_send_bytes: usize,
+    max_send_bytes: u64,
 
     /// Streams map, indexed by stream ID.
     streams: stream::StreamMap,
@@ -885,8 +885,8 @@ impl Connection {
             sent_count: 0,
 
             rx_data: 0,
-            max_rx_data: max_rx_data as usize,
-            max_rx_data_next: max_rx_data as usize,
+            max_rx_data: max_rx_data as u64,
+            max_rx_data_next: max_rx_data as u64,
 
             tx_data: 0,
             max_tx_data: 0,
@@ -1285,7 +1285,7 @@ impl Connection {
         // is an error there is enough credit to send a CONNECTION_CLOSE.
         if !self.verified_peer_address {
             self.max_send_bytes +=
-                (header_len + payload_len) * MAX_AMPLIFICATION_FACTOR;
+                ((header_len + payload_len) as u64) * MAX_AMPLIFICATION_FACTOR;
         }
 
         // To avoid sending an ACK in response to an ACK-only packet, we need
@@ -1469,7 +1469,10 @@ impl Connection {
                         None => continue,
                     };
 
-                    self.tx_data -= data.len();
+                    // TODO: due to a packet loss edge case the following could
+                    // go negative, though it's not clear why, so will need to
+                    // figure it out.
+                    self.tx_data = self.tx_data.saturating_sub(data.len() as u64);
 
                     let was_writable = stream.writable();
 
@@ -1491,7 +1494,7 @@ impl Connection {
         }
 
         // Calculate available space in the packet based on congestion window.
-        let mut left = cmp::min(self.recovery.cwnd(), b.cap());
+        let mut left:u64 = cmp::min(self.recovery.cwnd(), b.cap()) as u64;
 
         // Limit data sent by the server based on the amount of data received
         // from the client before its address is validated.
@@ -1524,7 +1527,7 @@ impl Connection {
         // length, the packet number and the AEAD overhead. We assume that
         // the payload length can always be encoded with a 2-byte varint.
         left = left
-            .checked_sub(b.off() + 2 + pn_len + overhead)
+            .checked_sub((b.off() + 2 + pn_len + overhead) as u64)
             .ok_or(Error::Done)?;
 
         let mut frames: Vec<frame::Frame> = Vec::new();
@@ -1549,11 +1552,11 @@ impl Connection {
                 ranges: self.pkt_num_spaces[epoch].recv_pkt_need_ack.clone(),
             };
 
-            if frame.wire_len() <= left {
+            if frame.wire_len() as u64 <= left {
                 self.pkt_num_spaces[epoch].ack_elicited = false;
 
                 payload_len += frame.wire_len();
-                left -= frame.wire_len();
+                left -= frame.wire_len() as u64;
 
                 frames.push(frame);
             }
@@ -1570,11 +1573,11 @@ impl Connection {
                 max: self.max_rx_data_next as u64,
             };
 
-            if frame.wire_len() <= left {
+            if frame.wire_len() as u64 <= left {
                 self.max_rx_data = self.max_rx_data_next;
 
                 payload_len += frame.wire_len();
-                left -= frame.wire_len();
+                left -= frame.wire_len() as u64;
 
                 frames.push(frame);
 
@@ -1595,12 +1598,12 @@ impl Connection {
                     max: stream.recv.update_max_data() as u64,
                 };
 
-                if frame.wire_len() > left {
+                if frame.wire_len() as u64 > left {
                     break;
                 }
 
                 payload_len += frame.wire_len();
-                left -= frame.wire_len();
+                left -= frame.wire_len() as u64;
 
                 frames.push(frame);
 
@@ -1614,7 +1617,7 @@ impl Connection {
             let frame = frame::Frame::Ping;
 
             payload_len += frame.wire_len();
-            left -= frame.wire_len();
+            left -= frame.wire_len() as u64;
 
             frames.push(frame);
 
@@ -1633,7 +1636,7 @@ impl Connection {
             };
 
             payload_len += frame.wire_len();
-            left -= frame.wire_len();
+            left -= frame.wire_len() as u64;
 
             frames.push(frame);
 
@@ -1652,7 +1655,7 @@ impl Connection {
                 };
 
                 payload_len += frame.wire_len();
-                left -= frame.wire_len();
+                left -= frame.wire_len() as u64;
 
                 frames.push(frame);
 
@@ -1670,7 +1673,7 @@ impl Connection {
             };
 
             payload_len += frame.wire_len();
-            left -= frame.wire_len();
+            left -= frame.wire_len() as u64;
 
             frames.push(frame);
 
@@ -1691,7 +1694,7 @@ impl Connection {
             let frame = frame::Frame::Crypto { data: crypto_buf };
 
             payload_len += frame.wire_len();
-            left -= frame.wire_len();
+            left -= frame.wire_len() as u64;
 
             frames.push(frame);
 
@@ -1715,13 +1718,13 @@ impl Connection {
                     self.max_tx_data - self.tx_data,
                 );
 
-                let stream_buf = stream.send.pop(stream_len)?;
+                let stream_buf = stream.send.pop(stream_len as u64)?;
 
                 if stream_buf.is_empty() {
                     continue;
                 }
 
-                self.tx_data += stream_buf.len();
+                self.tx_data += stream_buf.len() as u64;
 
                 let frame = frame::Frame::Stream {
                     stream_id,
@@ -1729,7 +1732,7 @@ impl Connection {
                 };
 
                 payload_len += frame.wire_len();
-                left -= frame.wire_len();
+                left -= frame.wire_len() as u64;
 
                 frames.push(frame);
 
@@ -1755,7 +1758,7 @@ impl Connection {
             let pkt_len = pn_len + payload_len + overhead;
 
             let frame = frame::Frame::Padding {
-                len: cmp::min(MIN_CLIENT_INITIAL_LEN - pkt_len, left),
+                len: cmp::min((MIN_CLIENT_INITIAL_LEN - pkt_len) as u64, left) as usize,
             };
 
             payload_len += frame.wire_len();
@@ -1841,7 +1844,7 @@ impl Connection {
             self.drop_initial_state();
         }
 
-        self.max_send_bytes = self.max_send_bytes.saturating_sub(written);
+        self.max_send_bytes = self.max_send_bytes.saturating_sub(written as u64);
 
         Ok(written)
     }
@@ -1891,7 +1894,7 @@ impl Connection {
 
         let (read, fin) = stream.recv.pop(out)?;
 
-        self.max_rx_data_next = self.max_rx_data_next.saturating_add(read);
+        self.max_rx_data_next = self.max_rx_data_next.saturating_add(read as u64);
 
         Ok((read, fin))
     }
@@ -1924,10 +1927,10 @@ impl Connection {
 
         let max_rx_data =
             self.local_transport_params
-                .initial_max_stream_data_bidi_local as usize;
+                .initial_max_stream_data_bidi_local;
         let max_tx_data =
             self.peer_transport_params
-                .initial_max_stream_data_bidi_remote as usize;
+                .initial_max_stream_data_bidi_remote;
 
         // Get existing stream or create a new one.
         let stream = self.streams.get_or_create(
@@ -2202,7 +2205,7 @@ impl Connection {
                         return Err(Error::InvalidTransportParam);
                     }
 
-                    self.max_tx_data = peer_params.initial_max_data as usize;
+                    self.max_tx_data = peer_params.initial_max_data;
 
                     self.streams.update_peer_max_streams_bidi(
                         peer_params.initial_max_streams_bidi as usize,
@@ -2327,12 +2330,10 @@ impl Connection {
 
                 let max_rx_data = self
                     .local_transport_params
-                    .initial_max_stream_data_bidi_remote
-                    as usize;
+                    .initial_max_stream_data_bidi_remote;
                 let max_tx_data = self
                     .peer_transport_params
-                    .initial_max_stream_data_bidi_local
-                    as usize;
+                    .initial_max_stream_data_bidi_local;
 
                 // Get existing stream or create a new one.
                 let stream = self.streams.get_or_create(
@@ -2343,7 +2344,7 @@ impl Connection {
                     self.is_server,
                 )?;
 
-                self.rx_data += stream.recv.reset(final_size as usize)?;
+                self.rx_data += stream.recv.reset(final_size)? as u64;
 
                 if self.rx_data > self.max_rx_data {
                     return Err(Error::FlowControl);
@@ -2394,12 +2395,10 @@ impl Connection {
 
                 let max_rx_data = self
                     .local_transport_params
-                    .initial_max_stream_data_bidi_remote
-                    as usize;
+                    .initial_max_stream_data_bidi_remote;
                 let max_tx_data = self
                     .peer_transport_params
-                    .initial_max_stream_data_bidi_local
-                    as usize;
+                    .initial_max_stream_data_bidi_local;
 
                 // Get existing stream or create a new one.
                 let stream = self.streams.get_or_create(
@@ -2410,7 +2409,7 @@ impl Connection {
                     self.is_server,
                 )?;
 
-                self.rx_data += data.len();
+                self.rx_data += data.len() as u64;
 
                 if self.rx_data > self.max_rx_data {
                     return Err(Error::FlowControl);
@@ -2420,18 +2419,16 @@ impl Connection {
             },
 
             frame::Frame::MaxData { max } => {
-                self.max_tx_data = cmp::max(self.max_tx_data, max as usize);
+                self.max_tx_data = cmp::max(self.max_tx_data, max);
             },
 
             frame::Frame::MaxStreamData { stream_id, max } => {
                 let max_rx_data = self
                     .local_transport_params
-                    .initial_max_stream_data_bidi_remote
-                    as usize;
+                    .initial_max_stream_data_bidi_remote;
                 let max_tx_data = self
                     .peer_transport_params
-                    .initial_max_stream_data_bidi_local
-                    as usize;
+                    .initial_max_stream_data_bidi_local;
 
                 // Get existing stream or create a new one.
                 let stream = self.streams.get_or_create(
@@ -2444,7 +2441,7 @@ impl Connection {
 
                 let was_writable = stream.writable();
 
-                stream.send.update_max_data(max as usize);
+                stream.send.update_max_data(max);
 
                 // If the stream is now writable push it to the writable queue,
                 // but only if it wasn't already queued.
@@ -3272,7 +3269,7 @@ mod tests {
         let server_sent =
             testing::recv_send(&mut pipe.server, &mut buf, client_sent).unwrap();
 
-        assert_eq!(server_sent, (client_sent - 1) * MAX_AMPLIFICATION_FACTOR);
+        assert_eq!(server_sent, (client_sent - 1) * MAX_AMPLIFICATION_FACTOR as usize);
     }
 
     #[test]
