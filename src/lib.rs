@@ -241,6 +241,8 @@ extern crate log;
 use std::cmp;
 use std::time;
 
+use std::collections::VecDeque;
+
 /// The current QUIC wire version.
 pub const PROTOCOL_VERSION: u32 = 0xff00_0016;
 
@@ -645,6 +647,8 @@ pub struct Connection {
     /// completed.
     early_app_pkts: usize,
 
+    queued_frames: VecDeque<frame::Frame>,
+
     /// Error code to be sent to the peer in CONNECTION_CLOSE.
     error: Option<u64>,
 
@@ -905,6 +909,8 @@ impl Connection {
             early_app_frames: Vec::new(),
 
             early_app_pkts: 0,
+
+            queued_frames: VecDeque::new(),
 
             error: None,
 
@@ -1969,14 +1975,21 @@ impl Connection {
     /// [`stream_recv()`]: struct.Connection.html#method.stream_recv
     /// [`stream_send()`]: struct.Connection.html#method.stream_send
     pub fn stream_shutdown(
-        &mut self, stream_id: u64, direction: Shutdown, _err: u64,
+        &mut self, stream_id: u64, direction: Shutdown, err: u64,
     ) -> Result<()> {
         // Get existing stream.
         let stream = self.streams.get_mut(stream_id).ok_or(Error::Done)?;
 
         match direction {
             // TODO: send STOP_SENDING
-            Shutdown::Read => stream.recv.shutdown(),
+            Shutdown::Read => {
+                stream.recv.shutdown()?;
+
+                self.queued_frames.push_back(frame::Frame::StopSending {
+                    stream_id,
+                    error_code: err,
+                });
+            },
 
             // TODO: send RESET_STREAM
             Shutdown::Write => stream.send.shutdown(),

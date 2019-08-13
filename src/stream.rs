@@ -494,10 +494,16 @@ impl RecvBuf {
     }
 
     /// Shuts down receiving data.
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) -> Result<()> {
+        if self.drain {
+            return Err(Error::Done);
+        }
+
         self.drain = true;
 
         self.data.clear();
+
+        Ok(())
     }
 
     /// Returns true if we need to update the local flow control limit.
