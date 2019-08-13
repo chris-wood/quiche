@@ -48,5 +48,5 @@ pub fn rand_u64() -> u64 {
 }
 
 extern {
-    fn RAND_bytes(buf: *mut u8, len: libc::size_t) -> libc::c_int;
+    fn RAND_bytes(buf: *mut u8, len: usize) -> i32;
 }

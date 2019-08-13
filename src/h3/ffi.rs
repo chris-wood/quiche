@@ -28,10 +28,7 @@ use std::ptr;
 use std::slice;
 use std::str;
 
-use libc::c_int;
-use libc::c_void;
-use libc::size_t;
-use libc::ssize_t;
+use std::ffi::c_void;
 
 use crate::*;
 
@@ -102,15 +99,15 @@ pub extern fn quiche_h3_event_for_each_header(
     ev: &h3::Event,
     cb: fn(
         name: *const u8,
-        name_len: size_t,
+        name_len: usize,
 
         value: *const u8,
-        value_len: size_t,
+        value_len: usize,
 
         argp: *mut c_void,
-    ) -> c_int,
+    ) -> i32,
     argp: *mut c_void,
-) -> c_int {
+) -> i32 {
     match ev {
         h3::Event::Headers(headers) =>
             for h in headers {
@@ -150,7 +147,7 @@ pub struct Header {
 #[no_mangle]
 pub extern fn quiche_h3_send_request(
     conn: &mut h3::Connection, quic_conn: &mut Connection,
-    headers: *const Header, headers_len: size_t, fin: bool,
+    headers: *const Header, headers_len: usize, fin: bool,
 ) -> i64 {
     let req_headers = headers_from_ptr(headers, headers_len);
 
@@ -164,30 +161,30 @@ pub extern fn quiche_h3_send_request(
 #[no_mangle]
 pub extern fn quiche_h3_send_response(
     conn: &mut h3::Connection, quic_conn: &mut Connection, stream_id: u64,
-    headers: *const Header, headers_len: size_t, fin: bool,
-) -> c_int {
+    headers: *const Header, headers_len: usize, fin: bool,
+) -> i32 {
     let resp_headers = headers_from_ptr(headers, headers_len);
 
     match conn.send_response(quic_conn, stream_id, &resp_headers, fin) {
         Ok(_) => 0,
 
-        Err(e) => e.to_c() as c_int,
+        Err(e) => e.to_c() as i32,
     }
 }
 
 #[no_mangle]
 pub extern fn quiche_h3_send_body(
     conn: &mut h3::Connection, quic_conn: &mut Connection, stream_id: u64,
-    body: *const u8, body_len: size_t, fin: bool,
-) -> ssize_t {
-    if body_len > <ssize_t>::max_value() as usize {
+    body: *const u8, body_len: usize, fin: bool,
+) -> isize {
+    if body_len > <isize>::max_value() as usize {
         panic!("The provided buffer is too large");
     }
 
     let body = unsafe { slice::from_raw_parts(body, body_len) };
 
     match conn.send_body(quic_conn, stream_id, body, fin) {
-        Ok(v) => v as ssize_t,
+        Ok(v) => v as isize,
 
         Err(e) => e.to_c(),
     }
@@ -196,16 +193,16 @@ pub extern fn quiche_h3_send_body(
 #[no_mangle]
 pub extern fn quiche_h3_recv_body(
     conn: &mut h3::Connection, quic_conn: &mut Connection, stream_id: u64,
-    out: *mut u8, out_len: size_t,
-) -> ssize_t {
-    if out_len > <ssize_t>::max_value() as usize {
+    out: *mut u8, out_len: usize,
+) -> isize {
+    if out_len > <isize>::max_value() as usize {
         panic!("The provided buffer is too large");
     }
 
     let out = unsafe { slice::from_raw_parts_mut(out, out_len) };
 
     match conn.recv_body(quic_conn, stream_id, out) {
-        Ok(v) => v as ssize_t,
+        Ok(v) => v as isize,
 
         Err(e) => e.to_c(),
     }
@@ -216,7 +213,7 @@ pub extern fn quiche_h3_conn_free(conn: *mut h3::Connection) {
     unsafe { Box::from_raw(conn) };
 }
 
-fn headers_from_ptr(ptr: *const Header, len: size_t) -> Vec<h3::Header> {
+fn headers_from_ptr(ptr: *const Header, len: usize) -> Vec<h3::Header> {
     let headers = unsafe { slice::from_raw_parts(ptr, len) };
 
     let mut out = Vec::new();

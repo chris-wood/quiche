@@ -325,7 +325,7 @@ impl Error {
         }
     }
 
-    fn to_c(self) -> libc::ssize_t {
+    fn to_c(self) -> isize {
         self as _
     }
 }
