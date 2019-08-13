@@ -61,6 +61,8 @@ pub struct StreamMap {
     ///
     /// Streams are added to the back of the list, and removed from the front.
     writable: VecDeque<u64>,
+
+    readable: VecDeque<u64>,
 }
 
 impl StreamMap {
@@ -154,6 +156,10 @@ impl StreamMap {
         Ok(stream)
     }
 
+    pub fn push_readable(&mut self, stream_id: u64) {
+        self.readable.push_back(stream_id);
+    }
+
     /// Pushes the stream ID to the back of the writable streams queue.
     ///
     /// Note that the caller is responsible for checking that the specified
@@ -196,7 +202,7 @@ impl StreamMap {
 
     /// Creates an iterator over streams that have outstanding data to read.
     pub fn readable(&mut self) -> Readable {
-        Readable::new(&self.streams)
+        Readable::new(&mut self.readable)
     }
 
     /// Creates an iterator over all streams.
@@ -263,14 +269,12 @@ pub fn is_bidi(stream_id: u64) -> bool {
 ///
 /// [`readable()`]: struct.Connection.html#method.readable
 pub struct Readable<'a> {
-    streams: hash_map::Iter<'a, u64, Stream>,
+    streams: &'a mut VecDeque<u64>,
 }
 
 impl<'a> Readable<'a> {
-    fn new(streams: &HashMap<u64, Stream>) -> Readable {
-        Readable {
-            streams: streams.iter(),
-        }
+    fn new(streams: &mut VecDeque<u64>) -> Readable {
+        Readable { streams }
     }
 }
 
@@ -278,13 +282,13 @@ impl<'a> Iterator for Readable<'a> {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for (id, s) in &mut self.streams {
-            if s.readable() {
-                return Some(*id);
-            }
-        }
+        self.streams.pop_front()
+    }
+}
 
-        None
+impl<'a> ExactSizeIterator for Readable<'a> {
+    fn len(&self) -> usize {
+        self.streams.len()
     }
 }
 

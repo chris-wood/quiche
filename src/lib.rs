@@ -2410,7 +2410,13 @@ impl Connection {
                 // Get existing stream or create a new one.
                 let stream = self.get_or_create_stream(stream_id, false)?;
 
+                let was_readable = stream.readable();
+
                 stream.recv.push(data)?;
+
+                if stream.readable() && !was_readable {
+                    self.streams.push_readable(stream_id);
+                }
 
                 self.rx_data += data_len;
             },
